@@ -21,10 +21,10 @@ struct Opt {
     /// upstream mjpeg url
     url: String,
     /// upstream mjpeg server username
-    #[clap(short, long, default_value = "username")]
+    #[clap(short, long, env = "MDAP_USERNAME", default_value = "username")]
     username: String,
     /// upstream mjpeg server password
-    #[clap(short, long, default_value = "password")]
+    #[clap(short, long, env = "MDAP_PASSWORD", default_value = "password")]
     password: String,
 }
 struct AppState {

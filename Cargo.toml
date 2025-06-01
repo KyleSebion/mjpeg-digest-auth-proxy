@@ -1,11 +1,11 @@
 [package]
 name = "mjpeg-digest-auth-proxy"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 
 [dependencies]
 axum = "0.8.4"
-clap = { version = "4.5.39", features = ["derive"] }
+clap = { version = "4.5.39", features = ["derive", "env"] }
 diqwest = "3.1.0"
 futures = "0.3.31"
 reqwest = { version = "0.12.18", features = ["stream"] }
