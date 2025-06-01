@@ -12,6 +12,8 @@ use futures::{FutureExt, TryStreamExt};
 use reqwest::{Client, header};
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(version)]
@@ -39,19 +41,41 @@ impl AppState {
         })
     }
 }
+fn setup_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .or_else(|_| {
+                    EnvFilter::try_new(format!(
+                        "{}=debug,tower_http=debug,axum::rejection=trace",
+                        env!("CARGO_CRATE_NAME")
+                    ))
+                })
+                .expect("tracing setup failed"),
+        )
+        .init();
+}
 #[tokio::main]
 async fn main() {
     let state = AppState::new();
+    setup_tracing();
     let app = Router::new()
         .route("/", get(mjpeg))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(&state.opt.binding)
         .await
         .expect("bind failed");
+    tracing::debug!(
+        "listening on {:?}; proxying to {}",
+        listener.local_addr().expect("local_addr"),
+        state.opt.url
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(tokio::signal::ctrl_c().map(|_| ()))
         .await
         .expect("serve failed");
+    tracing::debug!("end");
 }
 async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let err_bg = StatusCode::BAD_GATEWAY.into_response();
@@ -63,7 +87,7 @@ async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     {
         Ok(ures) => ures,
         Err(err) => {
-            eprintln!("{err:?}");
+            tracing::error!("{err:?}");
             return err_bg;
         }
     };
@@ -73,7 +97,7 @@ async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let content_type = match ures.headers().get(header::CONTENT_TYPE) {
         Some(content_type) => content_type.clone(),
         None => {
-            eprintln!("{} missing", header::CONTENT_TYPE);
+            tracing::error!("{} missing", header::CONTENT_TYPE);
             return err_bg;
         }
     };
