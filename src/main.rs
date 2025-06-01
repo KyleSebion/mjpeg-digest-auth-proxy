@@ -67,7 +67,7 @@ async fn main() {
         .await
         .expect("bind failed");
     tracing::debug!(
-        "listening on {:?}; proxying to {}",
+        "listening on {}; proxying to {}",
         listener.local_addr().expect("local_addr"),
         state.opt.url
     );
