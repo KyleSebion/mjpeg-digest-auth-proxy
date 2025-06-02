@@ -1,8 +1,8 @@
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
-    extract::State,
-    http::{Response, StatusCode},
+    extract::{ConnectInfo, State, connect_info::IntoMakeServiceWithConnectInfo},
+    http::{Request, Response, StatusCode},
     response::IntoResponse,
     routing::get,
 };
@@ -10,7 +10,13 @@ use clap::Parser;
 use diqwest::WithDigestAuth;
 use futures::{FutureExt, TryStreamExt};
 use reqwest::{Client, header};
-use std::sync::Arc;
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_appender::rolling;
@@ -45,6 +51,19 @@ impl AppState {
         })
     }
 }
+#[derive(Clone)]
+struct RqId(Arc<AtomicU64>);
+impl RqId {
+    fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(1)))
+    }
+    fn extension() -> Extension<Self> {
+        Extension(Self::new())
+    }
+    fn next(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::Relaxed)
+    }
+}
 fn setup_tracing(state: Arc<AppState>) {
     let sub = tracing_subscriber::fmt().with_env_filter(
         EnvFilter::try_from_default_env()
@@ -63,21 +82,44 @@ fn setup_tracing(state: Arc<AppState>) {
         sub.init();
     }
 }
+fn mk_app(state: Arc<AppState>) -> IntoMakeServiceWithConnectInfo<Router, SocketAddr> {
+    Router::new()
+        .route("/", get(mjpeg))
+        .with_state(state)
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                let ext = request.extensions();
+                let client_addr = ext
+                    .get::<ConnectInfo<SocketAddr>>()
+                    .map_or_else(|| "unknown".into(), |a| a.0.to_string());
+                let id = ext.get::<RqId>().map_or_else(|| 0, |id| id.next());
+                tracing::info_span!(
+                    "request",
+                    id = %id,
+                    client = %client_addr,
+                    method = %request.method(),
+                    uri = %request.uri(),
+                )
+            }),
+        )
+        .layer(RqId::extension())
+        .into_make_service_with_connect_info::<SocketAddr>()
+}
+async fn mk_listener(state: Arc<AppState>) -> TcpListener {
+    TcpListener::bind(&state.opt.binding)
+        .await
+        .expect("bind failed")
+}
 #[tokio::main]
 async fn main() {
     let state = AppState::new();
     setup_tracing(state.clone());
-    let app = Router::new()
-        .route("/", get(mjpeg))
-        .with_state(state.clone())
-        .layer(TraceLayer::new_for_http());
-    let listener = TcpListener::bind(&state.opt.binding)
-        .await
-        .expect("bind failed");
+    let app = mk_app(state.clone());
+    let listener = mk_listener(state.clone()).await;
     tracing::debug!(
         "listening on {}; proxying to {}",
         listener.local_addr().expect("local_addr"),
-        state.opt.url
+        &state.opt.url
     );
     axum::serve(listener, app)
         .with_graceful_shutdown(tokio::signal::ctrl_c().map(|_| ()))
