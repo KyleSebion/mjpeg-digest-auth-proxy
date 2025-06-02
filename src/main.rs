@@ -13,6 +13,7 @@ use reqwest::{Client, header};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
+use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -28,6 +29,9 @@ struct Opt {
     /// upstream mjpeg server password
     #[clap(short, long, env = "MDAP_PASSWORD", default_value = "password")]
     password: String,
+    /// enable logging to daily file. supply a value to override the default log directory [default: logs]
+    #[clap(short, long, num_args=0..=1, require_equals=true, default_missing_value = "logs")]
+    log_dir: Option<String>,
 }
 struct AppState {
     client: Client,
@@ -41,24 +45,28 @@ impl AppState {
         })
     }
 }
-fn setup_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| {
-                    EnvFilter::try_new(format!(
-                        "{}=debug,tower_http=debug,axum::rejection=trace",
-                        env!("CARGO_CRATE_NAME")
-                    ))
-                })
-                .expect("tracing setup failed"),
-        )
-        .init();
+fn setup_tracing(state: Arc<AppState>) {
+    let sub = tracing_subscriber::fmt().with_env_filter(
+        EnvFilter::try_from_default_env()
+            .or_else(|_| {
+                EnvFilter::try_new(format!(
+                    "{}=debug,tower_http=debug,axum::rejection=trace",
+                    env!("CARGO_CRATE_NAME")
+                ))
+            })
+            .expect("tracing setup failed"),
+    );
+    if let Some(dir) = &state.opt.log_dir {
+        let file = rolling::daily(dir, "");
+        sub.with_writer(file).with_ansi(false).init();
+    } else {
+        sub.init();
+    }
 }
 #[tokio::main]
 async fn main() {
     let state = AppState::new();
-    setup_tracing();
+    setup_tracing(state.clone());
     let app = Router::new()
         .route("/", get(mjpeg))
         .with_state(state.clone())

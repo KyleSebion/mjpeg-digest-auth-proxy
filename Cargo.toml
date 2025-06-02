@@ -1,6 +1,6 @@
 [package]
 name = "mjpeg-digest-auth-proxy"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 
 [dependencies]
@@ -12,6 +12,7 @@ reqwest = { version = "0.12.18", features = ["stream"] }
 tokio = { version = "1.45.1", features = ["full"] }
 tower-http = { version = "0.6.4", features = ["trace"] }
 tracing = "0.1.41"
+tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
