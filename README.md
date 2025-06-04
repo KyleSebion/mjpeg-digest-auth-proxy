@@ -1,4 +1,4 @@
-mjpeg-digest-auth-proxy 1.0.4
+mjpeg-digest-auth-proxy 1.0.6
 ```
 Usage: mjpeg-digest-auth-proxy.exe [OPTIONS] <URL>
 

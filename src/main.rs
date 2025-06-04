@@ -9,7 +9,7 @@ use axum::{
 use clap::Parser;
 use diqwest::WithDigestAuth;
 use futures::{FutureExt, TryStreamExt};
-use reqwest::{Client, header};
+use reqwest::{Client, ClientBuilder, header};
 use std::{
     net::SocketAddr,
     sync::{
@@ -27,6 +27,7 @@ use tracing_subscriber::EnvFilter;
 struct Opt {
     #[clap(short, long, default_value = "127.0.0.1:11111")]
     binding: String,
+
     /// upstream mjpeg url
     url: String,
     /// upstream mjpeg server username
@@ -35,6 +36,11 @@ struct Opt {
     /// upstream mjpeg server password
     #[clap(short, long, env = "MDAP_PASSWORD", default_value = "password")]
     password: String,
+
+    /// allow insecure upstream server connections
+    #[clap(short, long)]
+    insecure: bool,
+
     /// enable logging to daily file. supply a value to override the default log directory [default: logs]
     #[clap(short, long, num_args=0..=1, require_equals=true, default_missing_value = "logs")]
     log_dir: Option<String>,
@@ -45,10 +51,12 @@ struct AppState {
 }
 impl AppState {
     fn new() -> Arc<Self> {
-        Arc::new(Self {
-            opt: Opt::parse(),
-            client: Client::new(),
-        })
+        let opt = Opt::parse();
+        let client = ClientBuilder::new()
+            .danger_accept_invalid_certs(opt.insecure)
+            .build()
+            .expect("failed to build client");
+        Arc::new(Self { opt, client })
     }
 }
 #[derive(Clone)]
