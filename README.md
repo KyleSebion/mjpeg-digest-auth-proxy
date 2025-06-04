@@ -1,6 +1,6 @@
 mjpeg-digest-auth-proxy 1.0.6
 ```
-Usage: mjpeg-digest-auth-proxy.exe [OPTIONS] <URL>
+Usage: mjpeg-digest-auth-proxy [OPTIONS] <URL>
 
 Arguments:
   <URL>  upstream mjpeg url
