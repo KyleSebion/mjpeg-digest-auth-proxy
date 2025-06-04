@@ -8,8 +8,8 @@ use axum::{
 };
 use clap::Parser;
 use diqwest::WithDigestAuth;
-use futures::{FutureExt, TryStreamExt};
-use reqwest::{Client, ClientBuilder, header};
+use futures::FutureExt;
+use reqwest::{Client, ClientBuilder};
 use std::{
     net::SocketAddr,
     sync::{
@@ -125,9 +125,8 @@ async fn main() {
     let app = mk_app(state.clone());
     let listener = mk_listener(state.clone()).await;
     tracing::debug!(
-        "listening on {}; proxying to {}",
-        listener.local_addr().expect("local_addr"),
-        &state.opt.url
+        listening_on = %listener.local_addr().expect("local_addr"),
+        proxying_to = %&state.opt.url
     );
     axum::serve(listener, app)
         .with_graceful_shutdown(tokio::signal::ctrl_c().map(|_| ()))
@@ -137,31 +136,33 @@ async fn main() {
 }
 async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let err_bg = StatusCode::BAD_GATEWAY.into_response();
-    let ures = match state
+    let u_rs = match state
         .client
         .get(&state.opt.url)
         .send_with_digest_auth(&state.opt.username, &state.opt.password)
         .await
     {
-        Ok(ures) => ures,
+        Ok(u_rs) => u_rs,
         Err(err) => {
-            tracing::error!("{err:?}");
+            tracing::error!(upstream_request_error = ?err);
             return err_bg;
         }
     };
-    if ures.status() != StatusCode::OK {
+    if u_rs.status() != StatusCode::OK {
         return err_bg;
     }
-    let content_type = match ures.headers().get(header::CONTENT_TYPE) {
-        Some(content_type) => content_type.clone(),
-        None => {
-            tracing::error!("{} missing", header::CONTENT_TYPE);
-            return err_bg;
-        }
-    };
-    let stream = ures.bytes_stream().map_err(std::io::Error::other);
-    Response::builder()
-        .header(header::CONTENT_TYPE, content_type)
-        .body(Body::from_stream(stream))
-        .expect("error building response")
+    let srv_err = StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let mut b = Response::builder();
+    if let Some(h) = b.headers_mut() {
+        *h = u_rs.headers().clone();
+    } else {
+        tracing::error!("headers_mut failed");
+        return srv_err;
+    }
+    if let Ok(rs) = b.body(Body::from_stream(u_rs.bytes_stream())) {
+        rs
+    } else {
+        tracing::error!("response build failed");
+        srv_err
+    }
 }
