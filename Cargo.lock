@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "mjpeg-digest-auth-proxy"
-version = "1.0.7"
+version = "1.0.8"
 dependencies = [
  "axum",
  "clap",

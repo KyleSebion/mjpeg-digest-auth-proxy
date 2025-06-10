@@ -8,17 +8,20 @@ use axum::{
 };
 use clap::Parser;
 use diqwest::WithDigestAuth;
-use futures::FutureExt;
+use futures::{FutureExt, Stream};
 use reqwest::{Client, ClientBuilder};
 use std::{
+    marker::Unpin,
     net::SocketAddr,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    task::{Context, Poll},
     time::Duration,
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, signal};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 use tracing_appender::rolling;
@@ -150,10 +153,34 @@ async fn main() {
         proxying_to = %&state.opt.url
     );
     axum::serve(listener, app)
-        .with_graceful_shutdown(tokio::signal::ctrl_c().map(|_| ()))
+        .with_graceful_shutdown(signal::ctrl_c().map(|_| ()))
         .await
         .expect("serve failed");
     tracing::debug!("end");
+}
+struct StreamWithLoggedEnd<S> {
+    inner: S,
+    span: Span,
+}
+impl<S> StreamWithLoggedEnd<S> {
+    fn new(inner: S, span: Span) -> Self {
+        StreamWithLoggedEnd { inner, span }
+    }
+}
+impl<S, E> Stream for StreamWithLoggedEnd<S>
+where
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
+{
+    type Item = Result<Bytes, E>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+impl<S> Drop for StreamWithLoggedEnd<S> {
+    fn drop(&mut self) {
+        let _s = self.span.enter();
+        tracing::debug!("stream ended");
+    }
 }
 async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let err_bg = StatusCode::BAD_GATEWAY.into_response();
@@ -180,7 +207,8 @@ async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         tracing::error!("headers_mut failed");
         return srv_err;
     }
-    if let Ok(rs) = b.body(Body::from_stream(u_rs.bytes_stream())) {
+    let s = StreamWithLoggedEnd::new(u_rs.bytes_stream(), Span::current());
+    if let Ok(rs) = b.body(Body::from_stream(s)) {
         rs
     } else {
         tracing::error!("response build failed");
