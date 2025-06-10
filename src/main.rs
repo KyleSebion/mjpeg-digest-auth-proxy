@@ -164,7 +164,7 @@ struct StreamWithLoggedEnd<S> {
 }
 impl<S> StreamWithLoggedEnd<S> {
     fn new(inner: S, span: Span) -> Self {
-        StreamWithLoggedEnd { inner, span }
+        Self { inner, span }
     }
 }
 impl<S, E> Stream for StreamWithLoggedEnd<S>
