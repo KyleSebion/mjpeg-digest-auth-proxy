@@ -1,6 +1,6 @@
 use axum::{
     Extension, Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{ConnectInfo, State, connect_info::IntoMakeServiceWithConnectInfo},
     http::{Request, Response, StatusCode},
     response::IntoResponse,
@@ -16,9 +16,11 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
+use tracing::Span;
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
@@ -90,26 +92,45 @@ fn setup_tracing(state: Arc<AppState>) {
         sub.init();
     }
 }
+trait LayerTrace {
+    fn layer_trace(self) -> Self;
+    fn make_span_with(request: &Request<Body>) -> Span;
+    fn on_body_chunk(chunk: &Bytes, latency: Duration, span: &Span);
+}
+impl LayerTrace for Router {
+    fn layer_trace(self) -> Self {
+        self.layer(
+            TraceLayer::new_for_http()
+                .make_span_with(Self::make_span_with)
+                .on_body_chunk(Self::on_body_chunk),
+        )
+    }
+    fn make_span_with(request: &Request<Body>) -> Span {
+        let ext = request.extensions();
+        let client_addr = ext
+            .get::<ConnectInfo<SocketAddr>>()
+            .map_or_else(|| "unknown".into(), |a| a.0.to_string());
+        let id = ext.get::<RqId>().map_or_else(|| 0, |id| id.next());
+        tracing::info_span!(
+            "request",
+            id = %id,
+            client = %client_addr,
+            method = %request.method(),
+            uri = %request.uri(),
+        )
+    }
+    fn on_body_chunk(chunk: &Bytes, latency: Duration, _: &Span) {
+        tracing::trace!(
+            size_bytes = %chunk.len(),
+            latency = ?latency,
+        )
+    }
+}
 fn mk_app(state: Arc<AppState>) -> IntoMakeServiceWithConnectInfo<Router, SocketAddr> {
     Router::new()
         .route("/", get(mjpeg))
         .with_state(state)
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
-                let ext = request.extensions();
-                let client_addr = ext
-                    .get::<ConnectInfo<SocketAddr>>()
-                    .map_or_else(|| "unknown".into(), |a| a.0.to_string());
-                let id = ext.get::<RqId>().map_or_else(|| 0, |id| id.next());
-                tracing::info_span!(
-                    "request",
-                    id = %id,
-                    client = %client_addr,
-                    method = %request.method(),
-                    uri = %request.uri(),
-                )
-            }),
-        )
+        .layer_trace()
         .layer(RqId::extension())
         .into_make_service_with_connect_info::<SocketAddr>()
 }
@@ -166,3 +187,5 @@ async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         srv_err
     }
 }
+// cargo watch -x 'r -r -- http://localhost:8080/streaming'
+// cargo watch -s 'timeout 10 & curl.exe http://localhost:11111 --max-filesize 10000 -o NUL'
