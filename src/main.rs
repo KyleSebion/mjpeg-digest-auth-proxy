@@ -1,9 +1,10 @@
 use axum::{
     Extension, Router,
     body::{Body, Bytes},
-    extract::{ConnectInfo, State, connect_info::IntoMakeServiceWithConnectInfo},
+    extract::{ConnectInfo, Request as MWRq, State, connect_info::IntoMakeServiceWithConnectInfo},
     http::{Request, Response, StatusCode},
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response as MWRs},
     routing::get,
 };
 use clap::Parser;
@@ -133,6 +134,7 @@ fn mk_app(state: Arc<AppState>) -> IntoMakeServiceWithConnectInfo<Router, Socket
     Router::new()
         .route("/", get(mjpeg))
         .with_state(state)
+        .layer(middleware::from_fn(middle))
         .layer_trace()
         .layer(RqId::extension())
         .into_make_service_with_connect_info::<SocketAddr>()
@@ -157,6 +159,11 @@ async fn main() {
         .await
         .expect("serve failed");
     tracing::debug!("end");
+}
+async fn middle(rq: MWRq, next: Next) -> MWRs {
+    let (parts, body) = next.run(rq).await.into_parts();
+    let stream = StreamWithLoggedEnd::new(body.into_data_stream(), Span::current());
+    Response::from_parts(parts, Body::from_stream(stream))
 }
 struct StreamWithLoggedEnd<S> {
     inner: S,
@@ -207,8 +214,7 @@ async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         tracing::error!("headers_mut failed");
         return srv_err;
     }
-    let s = StreamWithLoggedEnd::new(u_rs.bytes_stream(), Span::current());
-    if let Ok(rs) = b.body(Body::from_stream(s)) {
+    if let Ok(rs) = b.body(Body::from_stream(u_rs.bytes_stream())) {
         rs
     } else {
         tracing::error!("response build failed");
