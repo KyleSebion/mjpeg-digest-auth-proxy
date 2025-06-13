@@ -1,25 +1,23 @@
+mod mw;
 use axum::{
     Extension, Router,
     body::{Body, Bytes},
-    extract::{ConnectInfo, Request as MWRq, State, connect_info::IntoMakeServiceWithConnectInfo},
+    extract::{ConnectInfo, State, connect_info::IntoMakeServiceWithConnectInfo},
     http::{Request, Response, StatusCode},
-    middleware::{self, Next},
-    response::{IntoResponse, Response as MWRs},
+    response::IntoResponse,
     routing::get,
 };
 use clap::Parser;
 use diqwest::WithDigestAuth;
-use futures::{FutureExt, Stream};
+use futures::FutureExt;
+use mw::LayerTraceResponseEnd;
 use reqwest::{Client, ClientBuilder};
 use std::{
-    marker::Unpin,
     net::SocketAddr,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    task::{Context, Poll},
     time::Duration,
 };
 use tokio::{net::TcpListener, signal};
@@ -134,7 +132,7 @@ fn mk_app(state: Arc<AppState>) -> IntoMakeServiceWithConnectInfo<Router, Socket
     Router::new()
         .route("/", get(mjpeg))
         .with_state(state)
-        .layer(middleware::from_fn(middle))
+        .layer_trace_response_end()
         .layer_trace()
         .layer(RqId::extension())
         .into_make_service_with_connect_info::<SocketAddr>()
@@ -159,35 +157,6 @@ async fn main() {
         .await
         .expect("serve failed");
     tracing::debug!("end");
-}
-async fn middle(rq: MWRq, next: Next) -> MWRs {
-    let (parts, body) = next.run(rq).await.into_parts();
-    let stream = StreamWithLoggedEnd::new(body.into_data_stream(), Span::current());
-    Response::from_parts(parts, Body::from_stream(stream))
-}
-struct StreamWithLoggedEnd<S> {
-    inner: S,
-    span: Span,
-}
-impl<S> StreamWithLoggedEnd<S> {
-    fn new(inner: S, span: Span) -> Self {
-        Self { inner, span }
-    }
-}
-impl<S, E> Stream for StreamWithLoggedEnd<S>
-where
-    S: Stream<Item = Result<Bytes, E>> + Unpin,
-{
-    type Item = Result<Bytes, E>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
-    }
-}
-impl<S> Drop for StreamWithLoggedEnd<S> {
-    fn drop(&mut self) {
-        let _s = self.span.enter();
-        tracing::debug!("stream ended");
-    }
 }
 async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let err_bg = StatusCode::BAD_GATEWAY.into_response();
