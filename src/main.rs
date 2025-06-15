@@ -79,12 +79,7 @@ impl RqId {
 fn setup_tracing(state: Arc<AppState>) {
     let sub = tracing_subscriber::fmt().with_env_filter(
         EnvFilter::try_from_default_env()
-            .or_else(|_| {
-                EnvFilter::try_new(format!(
-                    "{}=debug,tower_http=debug,axum::rejection=trace",
-                    env!("CARGO_CRATE_NAME")
-                ))
-            })
+            .or_else(|_| EnvFilter::try_new("error"))
             .expect("tracing setup failed"),
     );
     if let Some(dir) = &state.opt.log_dir {
@@ -190,5 +185,5 @@ async fn mjpeg(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         srv_err
     }
 }
-// cargo watch -x 'r -r -- http://localhost:8080/streaming'
+// $env:RUST_LOG='trace'; cargo watch -x 'r -r -- http://localhost:8080/streaming'
 // cargo watch -s 'timeout 10 & curl.exe http://localhost:11111 --max-filesize 10000 -o NUL'
